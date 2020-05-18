@@ -1,0 +1,127 @@
+
+0.0 Install dependencies
+sudo apt -y install gcc-arm-linux-gnueabihf
+sudo apt -y install swig
+sudo apt-get install python-dev
+sudo apt-get install u-boot-tools  <--- mkImage
+sudo apt-get install figlet
+
+1.1 How to compile Uboot for OrangePi:
+
+git clone git@github.com:u-boot/u-boot.git
+git checkout -b v2020.07-rc2
+make distclean
+make -j4 ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- orangepi_zero_defconfig
+make -j4 ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf-
+
+1.2 How to write a bootloader to an SD card::
+sudo dd if=u-boot-sunxi-with-spl.bin of=/dev/mmcblk0 bs=1024 seek=8
+
+2.1 How to compile a Kernel:
+
+wget https://cdn.kernel.org/pub/linux/kernel/v5.x/linux-5.6.13.tar.xz
+tar -xf ./linux-5.6.13.tar.xz
+
+ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- make sunxi_defconfig
+ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- make -j8 zImage dtbs
+
+sudo cp arch/arm/boot/zImage /mnt/
+sudo cp arch/arm/boot/dts/sun8i-h2-plus-orangepi-zero.dtb /mnt/
+
+3.1 How to compile a BusyBox:
+
+mkdir busybox-build
+wget https://busybox.net/downloads/busybox-1.31.1.tar.bz2
+tar xvf busybox-1.31.1.tar.bz2
+rm *.tar.*
+cd busybox-1.31.1/
+
+make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- defconfig
+make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- menuconfig
+
+Busybox Settings -> Build Options [] Build BusyBox as a static binary (no shared libs)
+
+time make -j8 ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf-
+time make install -j8 ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- CONFIG_PREFIX=./../busybox-build
+
+
+4.1 How to create  rootFs:
+
+mkdir rootfs
+cd rootfs 
+
+mkdir bin 
+mkdir dev 
+mkdir etc 
+mkdir home 
+mkdir mnt 
+mkdir proc 
+mkdir sys 
+mkdir usr
+
+cd /dev/
+mknod ./tty1 c 4 1  
+sudo mknod console c 5 1
+sudo mknod sda b 8 0 
+
+4.2 Go to busybox and copy all files from folder busybox-build. 
+
+4.3 In rootfs folder create file: touch init
+
+4.4 Add text below to init file:
+
+cat > init << EOF
+#!/bin/sh
+mount -t proc none /proc
+mount -t sysfs none /sys
+exec /bin/sh
+EOF
+
+chmod +777 init
+
+find . -print0 | cpio --null -ov --format=newc > uInitrd.cpio
+sudo mkimage -A arm -T ramdisk -C none -n uInitrd -d uInitrd.cpio /mnt/uInitrd
+
+5.0 Bootloader config:
+
+5.1 Create file boot.cmd:
+cat > boot.cmd << EOF
+echo BOOT.SCR START
+ext2load mmc 0 0x41000000 zImage
+ext2load mmc 0 0x45000000 uInitrd
+ext2load mmc 0 0x43000000 sun8i-h2-plus-orangepi-zero.dtb
+setenv bootargs console=ttyS0,115200 earlyprintk root=/dev/mmcblk0p2 rw rootwait panic=10 
+bootz 0x41000000 0x45000000 0x43000000
+EOF
+
+
+
+U-boot console:
+fatls mmc 0
+ext2load mmc 0 0x41000000 zImage
+ext2load mmc 0 0x45000000 uInitrd
+ext2load mmc 0 0x43000000 sun8i-h2-plus-orangepi-zero.dtb
+boot
+
+!!!hexyl ./boot.cmd
+
+5.2 Create boot.scr
+sudo mkimage -C none -A arm -T script -d boot.cmd ./boot.scr
+
+
+6. Create partiotions on SD card:
+
+Flash u-boot
+sudo dd if=u-boot-sunxi-with-spl.bin of=/dev/mmcblk0 bs=1024 seek=8
+
+sudo umount /dev/mmcblk*
+
+sudo parted -s /dev/mmcblk0 mklabel msdos mkpart primary ext3 10M 26M mkpart primary ext4 26M 100%
+
+sudo mkfs.ext3 /dev/mmcblk0p1
+sudo mkfs.ext4 /dev/mmcblk0p2
+
+sudo umount /dev/mmcblk*
+sudo mount /dev/mmcblk0p1 /mnt
+
+7.1 Copy all file on SD card.
